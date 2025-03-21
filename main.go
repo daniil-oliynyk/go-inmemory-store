@@ -2,37 +2,15 @@ package main
 
 import (
 	"fmt"
-	"net"
+	"os"
 )
 
 func main() {
-	ln, err := net.Listen("tcp", ":8080")
+
+	knockoff_redis_server := Tcp_Server{port: ":8080"}
+	err := knockoff_redis_server.Run()
 	if err != nil {
-		fmt.Println("Error:", err)
-		return
+		fmt.Println("Error in Server ", err)
+		os.Exit(1)
 	}
-
-	defer ln.Close()
-
-	fmt.Println("Server is listening on port 8080")
-
-	for {
-		// Accept incoming connections
-		conn, err := ln.Accept()
-		if err != nil {
-			fmt.Println("Error:", err)
-			continue
-		}
-
-		// Handle client connection in a goroutine
-		go handleClient(conn)
-	}
-}
-
-func handleClient(conn net.Conn) {
-	fmt.Println("New client")
-
-	conn.Write([]byte("Hello from server"))
-
-	defer conn.Close()
 }
