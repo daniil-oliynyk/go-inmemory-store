@@ -1,9 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
-	"io"
 	"net"
+	"strconv"
 )
 
 type Server interface {
@@ -12,6 +13,12 @@ type Server interface {
 
 type Tcp_Server struct {
 	port string
+}
+
+type Client struct {
+	rd  *bufio.Reader
+	wt  *bufio.Writer
+	con net.Conn
 }
 
 func (t Tcp_Server) Run() error {
@@ -46,20 +53,61 @@ func (t Tcp_Server) Run() error {
 func handleConn(conn net.Conn, errCh chan<- error) {
 	defer conn.Close()
 
-	buff := make([]byte, 128)
+	client := Client{
+		rd:  bufio.NewReader(conn),
+		wt:  bufio.NewWriter(conn),
+		con: conn,
+	}
+
+	// buff := make([]byte, 128)
 	for {
-		nread, err := conn.Read(buff)
+
+		var bt byte
+
+		bt, err := client.rd.ReadByte()
 		if err != nil {
-			if err == io.EOF {
-				errCh <- nil
-				// return nil
+			fmt.Println("ReadByte Error: ", err)
+			errCh <- err
+		}
+
+		if bt == '*' {
+			// Now we know we have a multibulk array
+			// Next step is to get the length and proceed with reading it
+			btint, err := client.rd.ReadBytes('\n')
+			if err != nil {
+				fmt.Println("ReadBytes Error: ", err)
+				errCh <- err
+			}
+			// ReadBytes will also read \r\n so [:len(btint)-2] will remove the
+			// last 2 bytes which wil be \r\n
+			bulkArrLen, err := strconv.ParseInt(string(btint[:len(btint)-2]), 10, 64)
+			if err != nil {
+				fmt.Println("ParseInt Error: ", err)
+				errCh <- err
+			}
+			fmt.Println(bulkArrLen)
+
+			for i := 0; i < int(bulkArrLen); i++ {
+				// Now we need to read each element in the bulk array
+				// There are bulkArrLen amount of elements
+
 			}
 
-			fmt.Println("Read Error: ", err)
-			errCh <- err
-			// return err
 		}
-		fmt.Printf("command:\n%s", buff[:nread])
+
+		// nread, err := conn.Read(buff)
+		// if err != nil {
+		// 	if err == io.EOF {
+		// 		errCh <- nil
+		// 		// return nil
+		// 	}
+
+		// 	fmt.Println("Read Error: ", err)
+		// 	errCh <- err
+		// 	// return err
+		// }
+		// s := fmt.Sprintf("command:\n%s", buff[:nread])
+		// fmt.Println(s)
 
 		_, err = conn.Write([]byte("+PONG\r\n"))
 		if err != nil {
