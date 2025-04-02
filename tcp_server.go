@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"strings"
 )
 
 type Server interface {
@@ -17,9 +18,20 @@ type Tcp_Server struct {
 }
 
 type Client struct {
-	rd  *bufio.Reader
-	wt  *bufio.Writer
+	rd *bufio.Reader
+	// wt  *bufio.Writer
 	con net.Conn
+}
+
+// Possible typ are
+// Simple strings 	RESP2 	Simple 	+
+// Integers 	RESP2 	Simple 	:
+// Bulk strings 	RESP2 	Aggregate 	$
+type RESPValue struct {
+	typ     string
+	integer int
+	str     string
+	arr     []RESPValue
 }
 
 func (t Tcp_Server) Run() error {
@@ -41,61 +53,71 @@ func (t Tcp_Server) Run() error {
 		}
 
 		errCh := make(chan error)
+
 		go handleConn(conn, errCh)
 
 		// errs := <-errCh
 		// if errs != nil {
 		// 	return errs
 		// }
+
 	}
 	return nil
 }
 
 func handleConn(conn net.Conn, errCh chan<- error) {
-	defer conn.Close()
-
+	// defer conn.Close()
 	client := Client{
-		rd:  bufio.NewReader(conn),
-		wt:  bufio.NewWriter(conn),
+		rd: bufio.NewReader(conn),
+		// wt:  bufio.NewWriter(conn),
 		con: conn,
 	}
-
-	// buff := make([]byte, 128)
 	for {
-		// nread, err := client.con.Read(buff)
-		// if err != nil {
-		// 	if err == io.EOF {
-		// 		errCh <- nil
-		// 		// return nil
-		// 	}
 
-		// 	fmt.Println("Read Error: ", err)
-		// 	errCh <- err
-		// 	// return err
-		// }
-		// s := fmt.Sprintf("command:\n%s", buff[:nread])
-		// fmt.Println(s)
+		RESPInput := readVal(client.rd)
 
-		st := readVal(client.rd)
+		fmt.Println("handleConn.readVal RESPInput=", RESPInput)
 
-		fmt.Println("handleConn.readVal st=", st)
-		fmt.Println("handleConn.readVal st[1]=", st[0])
+		bulkArray := RESPInput.arr
+		fmt.Println("handleConn.bulkArray=", bulkArray)
+		// 		At this moment assuming a null command wont be sent.
+		// 		Redis commands are all uppercase, so I will enforce the same.
+		command := strings.ToUpper(bulkArray[0].str)
 
-		_, err := conn.Write([]byte("+PONG\r\n"))
-		if err != nil {
-			fmt.Println("Write Response Error:", err)
-			errCh <- err
+		fmt.Println("handleConn =", command)
 
-			// return err
+		switch command {
+		case "PING":
+
+			_, err := conn.Write([]byte("+PONG\r\n"))
+			if err != nil {
+				fmt.Println("Write Response Error:", err)
+				errCh <- err
+
+				// return err
+			}
+		case "ECHO":
+			msg := bulkArray[1].str
+			_, err := conn.Write([]byte("+'" + msg + "'\r\n"))
+			if err != nil {
+				fmt.Println("Write Response Error:", err)
+				errCh <- err
+
+				// return err
+			}
+		default:
+			_, err := conn.Write([]byte("\r\n"))
+			if err != nil {
+				fmt.Println("Write Response Error:", err)
+				errCh <- err
+			}
 		}
 	}
 }
 
-func readVal(rd *bufio.Reader) []interface{} {
+func readVal(rd *bufio.Reader) (vals RESPValue) {
 
 	var bt byte
-
-	vals := make([]interface{}, 0)
 
 	bt, err := rd.ReadByte()
 	if err != nil {
@@ -106,7 +128,8 @@ func readVal(rd *bufio.Reader) []interface{} {
 	if bt == '*' {
 		// Now we know we have a multibulk array
 		// Next step is to get the length and proceed with reading it
-		vals = append(vals, readArrayVal(rd))
+		// vals = append(vals, readArrayVal(rd))
+		vals = readArrayVal(rd)
 
 	} else {
 
@@ -120,35 +143,14 @@ func readVal(rd *bufio.Reader) []interface{} {
 		}
 		// Bulk strings 	RESP2 	Aggregate 	$
 		if bt == '$' {
-			btint, err := rd.ReadBytes('\n')
-			if err != nil {
-				fmt.Println("readVal.$.ReadBytes Error: ", err)
-
-			}
-			bulkValLen, err := strconv.ParseInt(string(btint[:len(btint)-2]), 10, 64)
-			if err != nil {
-				fmt.Println("readVal.$.ParseInt Error: ", err)
-
-			}
-			fmt.Println("readVal bulkValLen=", bulkValLen)
-
-			// +2 because \n\r will also be read
-			bulkStringBuff := make([]byte, bulkValLen+2)
-			nread, err := io.ReadFull(rd, bulkStringBuff)
-			if err != nil {
-				fmt.Println("readVal.$.ReadFull Error: ", err)
-			}
-			fmt.Println("readVal.$.ReadFull nread=", nread)
-			s := fmt.Sprintf("command:\n%s", bulkStringBuff)
-			fmt.Println(s)
-			vals = append(vals, string(bulkStringBuff))
+			vals = readBulkVal(rd)
 
 		}
 	}
 	return vals
 }
 
-func readArrayVal(rd *bufio.Reader) []interface{} {
+func readArrayVal(rd *bufio.Reader) (val RESPValue) {
 	btint, err := rd.ReadBytes('\n')
 	if err != nil {
 		fmt.Println("readArrayVal.ReadBytes Error: ", err)
@@ -167,7 +169,7 @@ func readArrayVal(rd *bufio.Reader) []interface{} {
 	// in the nested array. So i thinkk the array will be atleast bulkArrLen and will
 	// have to dynamically resize itself
 	// Actually atm I dont think nested arrays will even parse
-	bulkArrayVals := make([]interface{}, bulkArrLen)
+	bulkArrayVals := make([]RESPValue, bulkArrLen)
 
 	for i := 0; i < int(bulkArrLen); i++ {
 		// Now we need to read each element in the bulk array
@@ -176,5 +178,32 @@ func readArrayVal(rd *bufio.Reader) []interface{} {
 		val := readVal(rd)
 		bulkArrayVals[i] = val
 	}
-	return bulkArrayVals
+	return RESPValue{typ: "*", arr: bulkArrayVals}
+}
+
+func readBulkVal(rd *bufio.Reader) (val RESPValue) {
+
+	btint, err := rd.ReadBytes('\n')
+	if err != nil {
+		fmt.Println("readVal.$.ReadBytes Error: ", err)
+
+	}
+	bulkValLen, err := strconv.ParseInt(string(btint[:len(btint)-2]), 10, 64)
+	if err != nil {
+		fmt.Println("readVal.$.ParseInt Error: ", err)
+
+	}
+	fmt.Println("readVal bulkValLen=", bulkValLen)
+
+	//	+2 because \n\r will also be read
+	bulkStringBuff := make([]byte, bulkValLen+2)
+	nread, err := io.ReadFull(rd, bulkStringBuff)
+	if err != nil {
+		fmt.Println("readVal.$.ReadFull Error: ", err)
+	}
+	fmt.Println("readVal.$.ReadFull nread=", nread)
+	s := fmt.Sprintf("command:\n%s", bulkStringBuff)
+	fmt.Println(s)
+	return RESPValue{typ: "$", str: strings.TrimRight(string(bulkStringBuff), "\r\n")}
+
 }
